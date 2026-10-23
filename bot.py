@@ -48,7 +48,8 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     """
     text = (
         "Selamat datang di QRIS Generator Bot.\n\n"
-        "Tekan tombol di bawah untuk membuat QRIS."
+        "Tekan tombol di bawah untuk membuat QRIS, atau gunakan perintah cepat:\n"
+        "`/qr 5000`"
     )
     keyboard = [
         [InlineKeyboardButton("🔳 GENERATE QRIS", callback_data="btn_generate")]
@@ -56,10 +57,10 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     reply_markup = InlineKeyboardMarkup(keyboard)
 
     if update.message:
-        await update.message.reply_text(text, reply_markup=reply_markup)
+        await update.message.reply_text(text, reply_markup=reply_markup, parse_mode="Markdown")
     elif update.callback_query:
         await update.callback_query.answer()
-        await update.callback_query.message.reply_text(text, reply_markup=reply_markup)
+        await update.callback_query.message.reply_text(text, reply_markup=reply_markup, parse_mode="Markdown")
 
     # Akhiri conversation jika sebelumnya ada state aktif
     return ConversationHandler.END
@@ -84,39 +85,11 @@ async def ask_nominal_callback(update: Update, context: ContextTypes.DEFAULT_TYP
     return STATE_WAITING_NOMINAL
 
 
-async def handle_nominal_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+async def process_and_send_qris(update: Update, nominal: int, user_id: int):
     """
-    3. INPUT NOMINAL & 4. PROSES GENERATE QRIS
-    - Memvalidasi input hanya berupa angka dan > 0
-    - Mengirim ke QRIS service
-    - Menampilkan hasil QRIS jika berhasil atau pesan error jika gagal
+    Helper untuk memproses pembuatan gambar QRIS dan mengirimkannya ke chat
+    beserta tombol [🔄 GENERATE LAGI]
     """
-    user_text = update.message.text.strip()
-    user_id = update.effective_user.id
-    logger.info(f"User {user_id} memasukkan input nominal: {user_text}")
-
-    # Validasi hanya angka (digit) tanpa huruf, titik, koma, minus, atau simbol
-    if not re.fullmatch(r"^[0-9]+$", user_text):
-        error_msg = (
-            "⚠️ Input tidak valid.\n\n"
-            "Harap masukkan angka saja tanpa titik atau koma (minimal 1).\n"
-            "Contoh: 10000"
-        )
-        await update.message.reply_text(error_msg)
-        # Tetap di state menunggu nominal yang benar
-        return STATE_WAITING_NOMINAL
-
-    nominal = int(user_text)
-
-    # Validasi nominal harus lebih besar dari 0
-    if nominal <= 0:
-        error_msg = (
-            "⚠️ Nominal harus lebih besar dari 0.\n\n"
-            "Contoh: 10000"
-        )
-        await update.message.reply_text(error_msg)
-        return STATE_WAITING_NOMINAL
-
     # Keyboard tombol [🔄 GENERATE LAGI]
     regenerate_keyboard = InlineKeyboardMarkup([
         [InlineKeyboardButton("🔄 GENERATE LAGI", callback_data="btn_regenerate")]
@@ -135,7 +108,7 @@ async def handle_nominal_input(update: Update, context: ContextTypes.DEFAULT_TYP
         except Exception:
             pass
 
-        # 5. JIKA GENERATE QRIS BERHASIL
+        # JIKA GENERATE QRIS BERHASIL
         caption_text = (
             "✅ QRIS BERHASIL\n\n"
             f"💰 Nominal: {format_rupiah(nominal)}\n\n"
@@ -158,7 +131,7 @@ async def handle_nominal_input(update: Update, context: ContextTypes.DEFAULT_TYP
         except Exception:
             pass
 
-        # 6. JIKA GENERATE QRIS GAGAL
+        # JIKA GENERATE QRIS GAGAL
         fail_text = (
             "❌ QRIS GAGAL DIBUAT\n\n"
             "Terjadi kesalahan saat membuat QRIS.\n"
@@ -169,8 +142,83 @@ async def handle_nominal_input(update: Update, context: ContextTypes.DEFAULT_TYP
             reply_markup=regenerate_keyboard,
         )
 
+
+async def handle_nominal_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """
+    3. INPUT NOMINAL & 4. PROSES GENERATE QRIS
+    - Memvalidasi input hanya berupa angka dan > 0
+    - Mengirim ke QRIS service
+    - Menampilkan hasil QRIS jika berhasil atau pesan error jika gagal
+    """
+    user_text = update.message.text.strip().replace(".", "").replace(",", "")
+    user_id = update.effective_user.id
+    logger.info(f"User {user_id} memasukkan input nominal: {user_text}")
+
+    # Validasi hanya angka (digit) tanpa huruf atau simbol
+    if not re.fullmatch(r"^[0-9]+$", user_text):
+        error_msg = (
+            "⚠️ Input tidak valid.\n\n"
+            "Harap masukkan angka saja tanpa titik atau koma (minimal 1).\n"
+            "Contoh: 10000"
+        )
+        await update.message.reply_text(error_msg)
+        # Tetap di state menunggu nominal yang benar
+        return STATE_WAITING_NOMINAL
+
+    nominal = int(user_text)
+
+    # Validasi nominal harus lebih besar dari 0
+    if nominal <= 0:
+        error_msg = (
+            "⚠️ Nominal harus lebih besar dari 0.\n\n"
+            "Contoh: 10000"
+        )
+        await update.message.reply_text(error_msg)
+        return STATE_WAITING_NOMINAL
+
+    await process_and_send_qris(update, nominal, user_id)
+
     # Setelah proses selesai (berhasil / gagal), selesaikan percakapan
-    # Pengguna dapat menekan tombol [🔄 GENERATE LAGI] untuk memulai kembali
+    return ConversationHandler.END
+
+
+async def qr_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """
+    Perintah cepat langsung generate QRIS: /qr <nominal> (misal: /qr 5000)
+    """
+    user_id = update.effective_user.id
+
+    if not context.args:
+        help_text = (
+            "⚠️ Harap sertakan nominal rupiah.\n\n"
+            "Contoh penggunaan:\n"
+            "• `/qr 5000`\n"
+            "• `/qr 10000`"
+        )
+        await update.message.reply_text(help_text, parse_mode="Markdown")
+        return ConversationHandler.END
+
+    raw_arg = context.args[0].strip().replace(".", "").replace(",", "")
+    if not re.fullmatch(r"^[0-9]+$", raw_arg):
+        error_msg = (
+            "⚠️ Nominal tidak valid.\n\n"
+            "Harap masukkan angka saja.\n"
+            "Contoh: `/qr 5000`"
+        )
+        await update.message.reply_text(error_msg, parse_mode="Markdown")
+        return ConversationHandler.END
+
+    nominal = int(raw_arg)
+    if nominal <= 0:
+        error_msg = (
+            "⚠️ Nominal harus lebih besar dari 0.\n\n"
+            "Contoh: `/qr 5000`"
+        )
+        await update.message.reply_text(error_msg, parse_mode="Markdown")
+        return ConversationHandler.END
+
+    logger.info(f"User {user_id} meminta QR via command /qr: {nominal}")
+    await process_and_send_qris(update, nominal, user_id)
     return ConversationHandler.END
 
 
@@ -207,6 +255,7 @@ def main():
         entry_points=[
             CallbackQueryHandler(ask_nominal_callback, pattern=r"^(btn_generate|btn_regenerate)$"),
             CommandHandler("start", start_command),
+            CommandHandler("qr", qr_command),
         ],
         states={
             STATE_WAITING_NOMINAL: [
@@ -216,6 +265,7 @@ def main():
         fallbacks=[
             CommandHandler("cancel", cancel_command),
             CommandHandler("start", start_command),
+            CommandHandler("qr", qr_command),
             CallbackQueryHandler(ask_nominal_callback, pattern=r"^(btn_generate|btn_regenerate)$"),
         ],
         per_user=True,
@@ -225,6 +275,7 @@ def main():
 
     application.add_handler(conv_handler)
     application.add_handler(CommandHandler("start", start_command))
+    application.add_handler(CommandHandler("qr", qr_command))
 
     logger.info("Bot sedang berjalan (polling mode)...")
     application.run_polling(drop_pending_updates=True)
