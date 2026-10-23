@@ -1,0 +1,5 @@
+python-telegram-bot>=21.4
+qrcode[pil]>=8.2
+pillow>=13.0.0
+python-dotenv>=1.0.1
+httpx>=0.28.1
